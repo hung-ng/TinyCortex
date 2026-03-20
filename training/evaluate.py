@@ -171,7 +171,7 @@ def main():
 
     checkpoint_dir = args.checkpoint
     if not checkpoint_dir.is_absolute():
-        checkpoint_dir = PROJECT_ROOT / checkpoint_dir
+        checkpoint_dir = Path.cwd() / checkpoint_dir
 
     model = load_model(checkpoint_dir, device)
     print(f"Loaded model: {model.count_parameters():,} params")

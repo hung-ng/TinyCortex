@@ -142,7 +142,7 @@ def main():
 
     checkpoint_dir = args.checkpoint
     if not checkpoint_dir.is_absolute():
-        checkpoint_dir = PROJECT_ROOT / checkpoint_dir
+        checkpoint_dir = Path.cwd() / checkpoint_dir
 
     output_dir = args.output or (checkpoint_dir / "export")
 

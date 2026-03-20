@@ -16,6 +16,10 @@ venv/
 *.pth
 *.onnx
 
+# Training artifacts
+training/checkpoints/
+training/evaluation/predicted.wav
+
 # OS
 .DS_Store
 Thumbs.db
