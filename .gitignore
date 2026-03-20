@@ -34,3 +34,17 @@ Thumbs.db
 build/
 *.o
 *.metallib
+.build/
+DerivedData/
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# Test data (generated, not tracked)
+Tests/TinyCortexEngineTests/TestData/

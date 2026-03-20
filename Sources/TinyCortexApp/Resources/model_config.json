@@ -1,0 +1,541 @@
+{
+  "architecture": "TinyCortexTCN",
+  "channels": 16,
+  "blocks": 10,
+  "kernel_size": 3,
+  "receptive_field": 2047,
+  "total_parameters": 10769,
+  "total_bytes": 43076,
+  "layers": [
+    {
+      "name": "input_conv.weight",
+      "shape": [
+        16,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 0,
+      "byte_length": 64
+    },
+    {
+      "name": "input_conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 64,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.0.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 128,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.0.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 3200,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.0.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 3264,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.0.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 3328,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.0.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 4352,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.1.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 4416,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.1.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 7488,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.1.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 7552,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.1.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 7616,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.1.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 8640,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.2.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 8704,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.2.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 11776,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.2.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 11840,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.2.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 11904,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.2.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 12928,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.3.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 12992,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.3.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 16064,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.3.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 16128,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.3.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 16192,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.3.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 17216,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.4.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 17280,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.4.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 20352,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.4.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 20416,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.4.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 20480,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.4.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 21504,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.5.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 21568,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.5.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 24640,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.5.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 24704,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.5.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 24768,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.5.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 25792,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.6.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 25856,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.6.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 28928,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.6.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 28992,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.6.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 29056,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.6.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 30080,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.7.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 30144,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.7.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 33216,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.7.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 33280,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.7.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 33344,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.7.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 34368,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.8.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 34432,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.8.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 37504,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.8.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 37568,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.8.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 37632,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.8.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 38656,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.9.net.0.conv.weight",
+      "shape": [
+        16,
+        16,
+        3
+      ],
+      "dtype": "float32",
+      "byte_offset": 38720,
+      "byte_length": 3072
+    },
+    {
+      "name": "blocks.9.net.0.conv.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 41792,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.9.net.1.weight",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 41856,
+      "byte_length": 64
+    },
+    {
+      "name": "blocks.9.net.2.weight",
+      "shape": [
+        16,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 41920,
+      "byte_length": 1024
+    },
+    {
+      "name": "blocks.9.net.2.bias",
+      "shape": [
+        16
+      ],
+      "dtype": "float32",
+      "byte_offset": 42944,
+      "byte_length": 64
+    },
+    {
+      "name": "output_conv.weight",
+      "shape": [
+        1,
+        16,
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 43008,
+      "byte_length": 64
+    },
+    {
+      "name": "output_conv.bias",
+      "shape": [
+        1
+      ],
+      "dtype": "float32",
+      "byte_offset": 43072,
+      "byte_length": 4
+    }
+  ]
+}
