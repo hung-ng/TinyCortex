@@ -1,0 +1,8 @@
+{
+  "channels": 16,
+  "blocks": 10,
+  "kernel_size": 3,
+  "batch_size": 32,
+  "lr": 0.003,
+  "seed": 42
+}
