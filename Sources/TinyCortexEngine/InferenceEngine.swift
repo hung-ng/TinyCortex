@@ -30,9 +30,7 @@ public final class InferenceEngine {
     private let stateLengths: [Int]
     private var pendingCommandBuffer: MTLCommandBuffer?
 
-    /// When true, process() uses double-buffering (async GPU, one-buffer latency).
-    /// When false (default), process() blocks until GPU completes (zero extra latency).
-    public var asyncProcessing = false
+    /// Previous async command buffer for double-buffered processing.
 
     // Weight layout constants
     private let inputConvWeightOffset: Int
@@ -154,36 +152,47 @@ public final class InferenceEngine {
         }
     }
 
-    /// Process a buffer of audio samples through the TCN.
-    /// Uses double-buffering: outputs the previous frame's result while submitting
-    /// new GPU work asynchronously. Adds one buffer of latency but never blocks
-    /// the audio thread for GPU execution time.
-    /// - Parameters:
-    ///   - input: Pointer to `bufferSize` input samples.
-    ///   - output: Pointer to `bufferSize` output samples.
+    /// Synchronous processing — blocks until GPU completes. For tests and offline use.
     public func process(input: UnsafePointer<Float>, output: UnsafeMutablePointer<Float>) {
-        let T = bufferSize
-        let C = channels
-        let bytes = T * MemoryLayout<Float>.size
-
-        // Copy input samples to GPU buffer
+        let bytes = bufferSize * MemoryLayout<Float>.size
         memcpy(inputBuffer.contents(), input, bytes)
 
-        if asyncProcessing {
-            // Double-buffered: output previous frame's result while submitting new work.
-            // GPU had a full buffer period (~5.8ms) to complete since last commit.
-            if let pending = pendingCommandBuffer {
-                pending.waitUntilCompleted()
-                memcpy(output, outputBuffer.contents(), bytes)
-            } else {
-                memset(output, 0, bytes)
-            }
+        guard let cmdBuf = encodeInference() else { return }
+        cmdBuf.commit()
+        cmdBuf.waitUntilCompleted()
+        memcpy(output, outputBuffer.contents(), bytes)
+    }
+
+    /// Async double-buffered processing — outputs previous frame's result while
+    /// submitting new GPU work. Adds one buffer of latency. For real-time audio.
+    public func processAsync(input: UnsafePointer<Float>, output: UnsafeMutablePointer<Float>) {
+        let bytes = bufferSize * MemoryLayout<Float>.size
+        memcpy(inputBuffer.contents(), input, bytes)
+
+        // Output previous frame's result (GPU had ~5.8ms to complete)
+        if let pending = pendingCommandBuffer {
+            pending.waitUntilCompleted()
+            memcpy(output, outputBuffer.contents(), bytes)
+        } else {
+            memset(output, 0, bytes)
         }
+
+        guard let cmdBuf = encodeInference() else {
+            pendingCommandBuffer = nil
+            return
+        }
+        cmdBuf.commit()
+        pendingCommandBuffer = cmdBuf
+    }
+
+    /// Encode the full 42-dispatch inference pipeline into a command buffer.
+    private func encodeInference() -> MTLCommandBuffer? {
+        let T = bufferSize
+        let C = channels
 
         guard let cmdBuf = commandQueue.makeCommandBuffer(),
               let encoder = cmdBuf.makeComputeCommandEncoder() else {
-            pendingCommandBuffer = nil
-            return
+            return nil
         }
 
         // --- Dispatch 1: Input conv (1 → C) ---
@@ -197,7 +206,7 @@ public final class InferenceEngine {
         )
 
         // Barrier: input conv must finish before blocks read activationA
-        encoder.memoryBarrier(scope: .buffers)
+        encoder.memoryBarrier(resources: [activationA])
 
         // --- Dispatches 2–41: 10 TCN blocks × 4 dispatches ---
         for i in 0..<numBlocks {
@@ -217,9 +226,9 @@ public final class InferenceEngine {
                 stateLen: stateLen, head: head
             )
 
-            // Barrier: causal_dilated_conv3 must finish reading state
-            // before update_state overwrites it
-            encoder.memoryBarrier(scope: .buffers)
+            // Barrier: conv3 writes activationB, reads state →
+            // update_state writes state, PReLU reads activationB
+            encoder.memoryBarrier(resources: [activationB, stateBuffers[i]])
 
             // (b) Update state: write activationA to ring buffer
             encodeUpdateState(
@@ -229,8 +238,8 @@ public final class InferenceEngine {
                 T: T, C: C, stateLen: stateLen, head: head
             )
 
-            // Barrier: update_state must finish writing before next dispatches
-            encoder.memoryBarrier(scope: .buffers)
+            // Barrier: update_state must finish writing state
+            encoder.memoryBarrier(resources: [stateBuffers[i]])
 
             // Advance ring buffer head on CPU for next call
             let writeCount = min(T, stateLen)
@@ -245,7 +254,7 @@ public final class InferenceEngine {
             )
 
             // Barrier: PReLU must finish before conv1x1_residual reads activationB
-            encoder.memoryBarrier(scope: .buffers)
+            encoder.memoryBarrier(resources: [activationB])
 
             // (d) Conv1x1 + residual: activationB + activationA → activationA
             encodeConv1x1Residual(
@@ -260,7 +269,7 @@ public final class InferenceEngine {
 
             // Barrier: conv1x1_residual must finish writing activationA
             // before next block reads it
-            encoder.memoryBarrier(scope: .buffers)
+            encoder.memoryBarrier(resources: [activationA])
         }
 
         // --- Dispatch 42: Output conv (C → 1) ---
@@ -274,14 +283,7 @@ public final class InferenceEngine {
         )
 
         encoder.endEncoding()
-        cmdBuf.commit()
-
-        if asyncProcessing {
-            pendingCommandBuffer = cmdBuf
-        } else {
-            cmdBuf.waitUntilCompleted()
-            memcpy(output, outputBuffer.contents(), bytes)
-        }
+        return cmdBuf
     }
 
     // MARK: - Encoding helpers

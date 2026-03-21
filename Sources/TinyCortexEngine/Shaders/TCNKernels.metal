@@ -103,8 +103,8 @@ kernel void conv1x1_residual(
     if (tid >= T) return;
 
     // Read all residual values first since output may alias residual
-    float res[16];
-    for (uint o = 0; o < C; o++) {
+    float res[64];
+    for (uint o = 0; o < C && o < 64; o++) {
         res[o] = residual[tid * C + o];
     }
 

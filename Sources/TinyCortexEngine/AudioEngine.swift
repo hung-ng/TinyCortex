@@ -15,26 +15,34 @@ public final class AudioEngine {
     public private(set) var sampleRate: Double = 0
     public var lastRenderFrames: Int = 0
 
-    /// Noise gate threshold (RMS). Input below this level fades output to silence.
+    /// Noise gate open threshold (RMS). Input above this level opens the gate.
     /// Range: 0.0 (gate disabled) to 1.0. Typical values: 0.005–0.05.
     public var gateThreshold: Float {
-        get { gateThresholdPtr.pointee }
-        set { gateThresholdPtr.pointee = newValue }
+        get { gateStatePtr.pointee.openThreshold }
+        set { gateStatePtr.pointee.openThreshold = newValue }
     }
-    private let gateThresholdPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
-    private let gateGainPtr = UnsafeMutablePointer<Float>.allocate(capacity: 1)
+    private let gateStatePtr = UnsafeMutablePointer<GateState>.allocate(capacity: 1)
+
+    /// True if the device sample rate doesn't match the model's training rate (44100 Hz).
+    public private(set) var sampleRateMismatch = false
+
+    /// Set when the audio device changes. Contains the event description (e.g., "Device changed").
+    /// Cleared on next successful start.
+    public private(set) var deviceChangeMessage: String?
+
+    private var inputDeviceID: AudioDeviceID = 0
+    private var outputDeviceID: AudioDeviceID = 0
+    private var aggregateDeviceID: AudioDeviceID = 0
 
     public init(inferenceEngine: InferenceEngine, gateThreshold: Float = 0.01) {
         self.inferenceEngine = inferenceEngine
         self.bufferSize = inferenceEngine.bufferSize
-        gateThresholdPtr.initialize(to: gateThreshold)
-        gateGainPtr.initialize(to: 0.0)
+        gateStatePtr.initialize(to: GateState(openThreshold: gateThreshold))
     }
 
     deinit {
         if isRunning { stop() }
-        gateThresholdPtr.deallocate()
-        gateGainPtr.deallocate()
+        gateStatePtr.deallocate()
     }
 
     public func start() throws {
@@ -70,8 +78,8 @@ public final class AudioEngine {
         }
 
         // --- Set devices ---
-        var inputDeviceID = AudioDeviceID()
-        var outputDeviceID = AudioDeviceID()
+        var inputDeviceID: AudioDeviceID = 0
+        var outputDeviceID: AudioDeviceID = 0
         var propSize = UInt32(MemoryLayout<AudioDeviceID>.size)
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
@@ -86,29 +94,29 @@ public final class AudioEngine {
             AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &propSize, &outputDeviceID
         )
 
-        // Set input device on element 1
-        status = AudioUnitSetProperty(
-            au, kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global, 1,
-            &inputDeviceID, UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
-        guard status == noErr else {
-            throw audioError("Failed to set input device", status)
+        print("[AudioEngine] Default input device: \(inputDeviceID), output device: \(outputDeviceID)")
+
+        // Determine which device to use for AUHAL
+        var deviceForAU = inputDeviceID
+        if inputDeviceID != outputDeviceID {
+            // Different input/output devices — create an aggregate device
+            deviceForAU = try createAggregateDevice(input: inputDeviceID, output: outputDeviceID)
+            aggregateDeviceID = deviceForAU
+            print("[AudioEngine] Created aggregate device: \(deviceForAU)")
         }
 
-        // Set output device on element 0
+        // Set the device on AUHAL (single device for both I/O)
         status = AudioUnitSetProperty(
             au, kAudioOutputUnitProperty_CurrentDevice,
             kAudioUnitScope_Global, 0,
-            &outputDeviceID, UInt32(MemoryLayout<AudioDeviceID>.size)
+            &deviceForAU, UInt32(MemoryLayout<AudioDeviceID>.size)
         )
         guard status == noErr else {
-            throw audioError("Failed to set output device", status)
+            throw audioError("Failed to set device", status)
         }
 
-        // --- Set buffer size on both devices ---
-        setDeviceBufferSize(inputDeviceID, frames: UInt32(bSize))
-        setDeviceBufferSize(outputDeviceID, frames: UInt32(bSize))
+        // --- Set buffer size ---
+        setDeviceBufferSize(deviceForAU, frames: UInt32(bSize))
 
         // --- Query sample rate from input device ---
         var sr: Float64 = 0
@@ -120,6 +128,10 @@ public final class AudioEngine {
         )
         AudioObjectGetPropertyData(inputDeviceID, &addr, 0, nil, &propSize, &sr)
         sampleRate = sr
+        sampleRateMismatch = sr != 44100
+        if sampleRateMismatch {
+            print("WARNING: Device sample rate is \(sr)Hz, model trained at 44100Hz")
+        }
 
         // --- Set our desired stream format: Float32 mono ---
         // AUHAL converts between device format and this format automatically.
@@ -182,8 +194,7 @@ public final class AudioEngine {
             renderBuf: renderBuf,
             outputChunk: outChunk,
             bufferSize: bSize,
-            gateGain: gateGainPtr,
-            gateThreshold: gateThresholdPtr,
+            gateState: gateStatePtr,
             engine: self
         ))
         contextPtr = ctxPtr
@@ -202,8 +213,15 @@ public final class AudioEngine {
             throw audioError("Failed to set render callback", status)
         }
 
-        // Enable async double-buffering for real-time safety
-        inferenceEngine.asyncProcessing = true
+        // Note: render callback uses processAsync() for double-buffered real-time processing
+
+        // --- Set MaximumFramesPerSlice to prevent oversized buffer delivery ---
+        var maxFrames = UInt32(bSize)
+        AudioUnitSetProperty(
+            au, kAudioUnitProperty_MaximumFramesPerSlice,
+            kAudioUnitScope_Global, 0,
+            &maxFrames, UInt32(MemoryLayout<UInt32>.size)
+        )
 
         // --- Initialize and start ---
         status = AudioUnitInitialize(au)
@@ -216,16 +234,23 @@ public final class AudioEngine {
             throw audioError("AudioOutputUnitStart failed", status)
         }
 
+        self.inputDeviceID = inputDeviceID
         isRunning = true
+        deviceChangeMessage = nil
+        registerDeviceListeners()
     }
 
     public func stop() {
+        removeDeviceListeners()
+
         if let au = auHAL {
             AudioOutputUnitStop(au)
             AudioUnitUninitialize(au)
             AudioComponentInstanceDispose(au)
             auHAL = nil
         }
+
+        destroyAggregateDevice()
 
         if let ctx = contextPtr {
             ctx.pointee.pullABL.deallocate()
@@ -238,6 +263,125 @@ public final class AudioEngine {
 
         isRunning = false
         inferenceEngine.resetState()
+    }
+
+    // MARK: - Device-change handling
+
+    private var deviceListenerBlocks: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+    private var restartPending = false
+
+    private func registerDeviceListeners() {
+        let handler: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self, self.isRunning, !self.restartPending else { return }
+                self.restartPending = true
+                // Stop immediately to prevent rendering with stale device
+                self.stop()
+                self.deviceChangeMessage = "Device changed — restarting..."
+                // Delay restart to let the system finalize new default devices
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.restartPending = false
+                    do {
+                        try self.start()
+                        self.deviceChangeMessage = "Device changed — restarted with new device"
+                    } catch {
+                        self.deviceChangeMessage = "Device changed — restart failed: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
+
+        // Listen for default device changes
+        var defaultInputAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var defaultOutputAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let systemObj = AudioObjectID(kAudioObjectSystemObject)
+        AudioObjectAddPropertyListenerBlock(systemObj, &defaultInputAddr, nil, handler)
+        deviceListenerBlocks.append((systemObj, defaultInputAddr, handler))
+
+        AudioObjectAddPropertyListenerBlock(systemObj, &defaultOutputAddr, nil, handler)
+        deviceListenerBlocks.append((systemObj, defaultOutputAddr, handler))
+
+        // Listen for device-is-alive on current devices
+        var aliveAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        AudioObjectAddPropertyListenerBlock(inputDeviceID, &aliveAddr, nil, handler)
+        deviceListenerBlocks.append((inputDeviceID, aliveAddr, handler))
+
+        // Listen for sample rate changes on the input device
+        var sampleRateAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectAddPropertyListenerBlock(inputDeviceID, &sampleRateAddr, nil, handler)
+        deviceListenerBlocks.append((inputDeviceID, sampleRateAddr, handler))
+    }
+
+    private func removeDeviceListeners() {
+        for (objID, var addr, block) in deviceListenerBlocks {
+            AudioObjectRemovePropertyListenerBlock(objID, &addr, nil, block)
+        }
+        deviceListenerBlocks.removeAll()
+    }
+
+    // MARK: - Aggregate device
+
+    private func createAggregateDevice(input: AudioDeviceID, output: AudioDeviceID) throws -> AudioDeviceID {
+        let inputUID = try deviceUID(for: input)
+        let outputUID = try deviceUID(for: output)
+
+        let desc: [String: Any] = [
+            kAudioAggregateDeviceNameKey as String: "TinyCortex Aggregate",
+            kAudioAggregateDeviceUIDKey as String: "com.tinycortex.aggregate.\(UUID().uuidString)",
+            kAudioAggregateDeviceIsPrivateKey as String: true,
+            kAudioAggregateDeviceSubDeviceListKey as String: [
+                [kAudioSubDeviceUIDKey as String: inputUID],
+                [kAudioSubDeviceUIDKey as String: outputUID],
+            ],
+            kAudioAggregateDeviceMasterSubDeviceKey as String: inputUID,
+        ]
+
+        var aggregateID: AudioDeviceID = 0
+        let status = AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggregateID)
+        guard status == noErr else {
+            throw audioError("Failed to create aggregate device", status)
+        }
+        return aggregateID
+    }
+
+    private func destroyAggregateDevice() {
+        if aggregateDeviceID != 0 {
+            AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            aggregateDeviceID = 0
+        }
+    }
+
+    private func deviceUID(for deviceID: AudioDeviceID) throws -> String {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var propSize = UInt32(MemoryLayout<Unmanaged<CFString>>.size)
+        var uid: Unmanaged<CFString>?
+        let status = AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &propSize, &uid)
+        guard status == noErr, let cfStr = uid?.takeRetainedValue() else {
+            throw audioError("Failed to get device UID for device \(deviceID)", status)
+        }
+        return cfStr as String
     }
 
     // MARK: - Device buffer size
@@ -265,6 +409,35 @@ public final class AudioEngine {
     }
 }
 
+// MARK: - Noise gate state machine
+
+private enum GatePhase {
+    case closed
+    case attack
+    case open
+    case hold
+    case release
+}
+
+private struct GateState {
+    var phase: GatePhase = .closed
+    var gain: Float = 0.0
+    var holdCounter: Int = 0       // samples remaining in hold phase
+
+    // Configurable threshold (user-facing)
+    var openThreshold: Float       // RMS to open gate (e.g., 0.015)
+
+    // Fixed parameters
+    let closeThreshold: Float = 0.008   // RMS to start closing (lower = hysteresis)
+    let attackCoeff: Float = 0.9        // ~1ms attack
+    let releaseCoeff: Float = 0.005     // ~50ms release
+    let holdSamples: Int = 4410         // 100ms at 44100 Hz
+
+    init(openThreshold: Float) {
+        self.openThreshold = openThreshold
+    }
+}
+
 // MARK: - Render context and callback
 
 private struct RenderContext {
@@ -274,8 +447,7 @@ private struct RenderContext {
     let renderBuf: UnsafeMutablePointer<Float>
     let outputChunk: UnsafeMutablePointer<Float>
     let bufferSize: Int
-    let gateGain: UnsafeMutablePointer<Float>
-    let gateThreshold: UnsafeMutablePointer<Float>
+    let gateState: UnsafeMutablePointer<GateState>
     unowned let engine: AudioEngine
 }
 
@@ -320,13 +492,13 @@ private func renderCallback(
         memset(ctx.renderBuf, 0, frames * MemoryLayout<Float>.size)
     }
 
-    // Process through inference engine
+    // Process through inference engine (async double-buffered)
     if frames == bSize {
-        ctx.inference.process(input: ctx.renderBuf, output: outData)
+        ctx.inference.processAsync(input: ctx.renderBuf, output: outData)
     } else {
         var offset = 0
         while offset + bSize <= frames {
-            ctx.inference.process(input: ctx.renderBuf + offset, output: ctx.outputChunk)
+            ctx.inference.processAsync(input: ctx.renderBuf + offset, output: ctx.outputChunk)
             memcpy(outData + offset, ctx.outputChunk, bSize * MemoryLayout<Float>.size)
             offset += bSize
         }
@@ -335,9 +507,9 @@ private func renderCallback(
         }
     }
 
-    // --- Noise gate ---
-    let threshold = ctx.gateThreshold.pointee
-    if threshold > 0 {
+    // --- Noise gate (state machine with hysteresis + hold) ---
+    let gs = ctx.gateState
+    if gs.pointee.openThreshold > 0 {
         // Measure input RMS
         var sumSq: Float = 0
         for i in 0..<frames {
@@ -346,19 +518,47 @@ private func renderCallback(
         }
         let rms = sqrtf(sumSq / Float(frames))
 
-        // Smooth gate gain: fast attack (~1ms), slow release (~50ms)
-        let attackCoeff: Float = 0.9     // open quickly
-        let releaseCoeff: Float = 0.005  // close slowly
-        var gain = ctx.gateGain.pointee
-        let target: Float = rms >= threshold ? 1.0 : 0.0
-        let coeff = target > gain ? attackCoeff : releaseCoeff
-        gain = gain + coeff * (target - gain)
-        ctx.gateGain.pointee = gain
+        // State machine transitions
+        switch gs.pointee.phase {
+        case .closed:
+            if rms >= gs.pointee.openThreshold {
+                gs.pointee.phase = .attack
+            }
+        case .attack:
+            gs.pointee.gain += gs.pointee.attackCoeff * (1.0 - gs.pointee.gain)
+            if gs.pointee.gain >= 0.999 {
+                gs.pointee.gain = 1.0
+                gs.pointee.phase = .open
+            }
+        case .open:
+            if rms < gs.pointee.closeThreshold {
+                gs.pointee.holdCounter = gs.pointee.holdSamples
+                gs.pointee.phase = .hold
+            }
+        case .hold:
+            gs.pointee.holdCounter -= frames
+            if rms >= gs.pointee.closeThreshold {
+                // Signal came back — return to open
+                gs.pointee.phase = .open
+            } else if gs.pointee.holdCounter <= 0 {
+                gs.pointee.phase = .release
+            }
+        case .release:
+            if rms >= gs.pointee.openThreshold {
+                gs.pointee.phase = .attack
+            } else {
+                gs.pointee.gain += gs.pointee.releaseCoeff * (0.0 - gs.pointee.gain)
+                if gs.pointee.gain < 0.001 {
+                    gs.pointee.gain = 0.0
+                    gs.pointee.phase = .closed
+                }
+            }
+        }
 
         // Apply gate gain to output
-        if gain < 0.999 {
+        if gs.pointee.gain < 0.999 {
             for i in 0..<frames {
-                outData[i] *= gain
+                outData[i] *= gs.pointee.gain
             }
         }
     }

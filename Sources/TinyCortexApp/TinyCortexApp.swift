@@ -67,11 +67,26 @@ struct ContentView: View {
 
             // Update debug info periodically
             Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
-                guard let audio = self.audioEngine, isRunning else {
+                guard let audio = self.audioEngine else {
+                    timer.invalidate()
+                    if !isRunning { return }
+                    // Engine was stopped externally (device change failed to restart)
+                    isRunning = false
+                    statusText = "Stopped"
+                    return
+                }
+                guard isRunning else {
                     timer.invalidate()
                     return
                 }
-                statusText = "Processing (\(config.totalParameters) params)\nSample rate: \(audio.sampleRate) Hz | Render frames: \(audio.lastRenderFrames)"
+                var status = "Processing (\(config.totalParameters) params)\nSample rate: \(audio.sampleRate) Hz | Render frames: \(audio.lastRenderFrames)"
+                if audio.sampleRateMismatch {
+                    status += "\n⚠ Model trained at 44100 Hz — output may sound incorrect"
+                }
+                if let msg = audio.deviceChangeMessage {
+                    status += "\n⚠ \(msg)"
+                }
+                statusText = status
             }
         } catch {
             statusText = "Error: \(error.localizedDescription)"
