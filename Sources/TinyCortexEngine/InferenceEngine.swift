@@ -141,6 +141,20 @@ public final class InferenceEngine {
         return try device.makeLibrary(source: source, options: nil)
     }
 
+    /// Report memory allocated for Metal buffers.
+    public func memoryReport() -> MemoryReport {
+        let ioBytes = inputBuffer.length + outputBuffer.length
+        let activationBytes = activationA.length + activationB.length
+        let stateBytes = stateBuffers.reduce(0) { $0 + $1.length }
+        return MemoryReport(
+            weightBytes: weightBuffer.length,
+            activationBytes: activationBytes,
+            stateBytes: stateBytes,
+            ioBytes: ioBytes,
+            totalBytes: weightBuffer.length + ioBytes + activationBytes + stateBytes
+        )
+    }
+
     /// Reset all state buffers to zero (e.g., between songs).
     public func resetState() {
         pendingCommandBuffer?.waitUntilCompleted()

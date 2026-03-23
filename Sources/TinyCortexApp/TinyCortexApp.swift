@@ -11,85 +11,113 @@ struct TinyCortexApp: App {
 }
 
 struct ContentView: View {
-    @State private var isRunning = false
-    @State private var statusText = "Ready"
-    @State private var audioEngine: AudioEngine?
+    @StateObject private var viewModel = AudioViewModel()
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("TinyCortex")
-                .font(.largeTitle.bold())
-
-            Text(statusText)
-                .foregroundColor(isRunning ? .green : .secondary)
-
-            Button(isRunning ? "Stop" : "Start") {
-                toggleAudio()
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                Text("TinyCortex")
+                    .font(.title.bold())
+                Spacer()
+                Button(viewModel.isRunning ? "Stop" : "Start") {
+                    viewModel.toggleAudio()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(viewModel.isRunning ? .red : .accentColor)
+                Circle()
+                    .fill(viewModel.isRunning ? .green : .gray)
+                    .frame(width: 10, height: 10)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+
+            if !viewModel.statusMessage.isEmpty {
+                Text(viewModel.statusMessage)
+                    .foregroundColor(.red)
+                    .font(.caption)
+            }
+
+            Divider()
+
+            // Input
+            Section {
+                sliderRow("Gate", value: $viewModel.gateThreshold, range: 0...0.1, format: "%.3f")
+            } header: {
+                Text("Input").font(.headline)
+            }
+
+            // EQ
+            Section {
+                sliderRow("Bass", value: $viewModel.bassGain, range: -12...12, format: "%+.1f dB")
+                sliderRow("Mid", value: $viewModel.midGain, range: -12...12, format: "%+.1f dB")
+                sliderRow("Treble", value: $viewModel.trebleGain, range: -12...12, format: "%+.1f dB")
+            } header: {
+                HStack {
+                    Text("EQ").font(.headline)
+                    Spacer()
+                    Button("Reset") {
+                        viewModel.bassGain = 0
+                        viewModel.midGain = 0
+                        viewModel.trebleGain = 0
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                }
+            }
+
+            Divider()
+
+            // Performance
+            Section {
+                if viewModel.isRunning {
+                    infoRow("Render", String(format: "%.2f ms / 5.8 ms", viewModel.renderTimeMean))
+                    infoRow("P95", String(format: "%.2f ms", viewModel.renderTimeP95))
+                    infoRow("Peak", String(format: "%.2f ms", viewModel.renderTimePeak))
+                }
+                if viewModel.modelParams > 0 {
+                    infoRow("Model", "\(viewModel.modelParams) params")
+                }
+                if viewModel.sampleRate > 0 {
+                    infoRow("Buffer", String(format: "256 @ %.0f Hz", viewModel.sampleRate))
+                }
+                if viewModel.sampleRateMismatch {
+                    Label("Model trained at 44100 Hz", systemImage: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                }
+                if let msg = viewModel.deviceChangeMessage {
+                    Label(msg, systemImage: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                }
+            } header: {
+                Text("Performance").font(.headline)
+            }
         }
-        .padding(40)
-        .frame(minWidth: 300, minHeight: 200)
+        .padding(24)
+        .frame(minWidth: 360, minHeight: 420)
     }
 
-    private func toggleAudio() {
-        if isRunning {
-            audioEngine?.stop()
-            audioEngine = nil
-            isRunning = false
-            statusText = "Stopped"
-            return
+    private func sliderRow(_ label: String, value: Binding<Float>, range: ClosedRange<Float>, format: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .frame(width: 50, alignment: .leading)
+                .font(.body.monospacedDigit())
+            Slider(value: value, in: range)
+            Text(String(format: format, value.wrappedValue))
+                .frame(width: 65, alignment: .trailing)
+                .font(.caption.monospacedDigit())
         }
+    }
 
-        do {
-            guard let configURL = Bundle.module.url(
-                forResource: "model_config", withExtension: "json", subdirectory: "Resources"
-            ) else {
-                statusText = "Error: model_config.json not found in bundle"
-                return
-            }
-            guard let weightsURL = Bundle.module.url(
-                forResource: "weights", withExtension: "bin", subdirectory: "Resources"
-            ) else {
-                statusText = "Error: weights.bin not found in bundle"
-                return
-            }
-
-            let config = try ModelConfig.load(from: configURL)
-            let engine = try InferenceEngine(config: config, weightsURL: weightsURL)
-            let audio = AudioEngine(inferenceEngine: engine)
-            try audio.start()
-
-            audioEngine = audio
-            isRunning = true
-            statusText = "Processing (\(config.totalParameters) params)\nSample rate: \(audio.sampleRate) Hz | Render frames: \(audio.lastRenderFrames)"
-
-            // Update debug info periodically
-            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { timer in
-                guard let audio = self.audioEngine else {
-                    timer.invalidate()
-                    if !isRunning { return }
-                    // Engine was stopped externally (device change failed to restart)
-                    isRunning = false
-                    statusText = "Stopped"
-                    return
-                }
-                guard isRunning else {
-                    timer.invalidate()
-                    return
-                }
-                var status = "Processing (\(config.totalParameters) params)\nSample rate: \(audio.sampleRate) Hz | Render frames: \(audio.lastRenderFrames)"
-                if audio.sampleRateMismatch {
-                    status += "\n⚠ Model trained at 44100 Hz — output may sound incorrect"
-                }
-                if let msg = audio.deviceChangeMessage {
-                    status += "\n⚠ \(msg)"
-                }
-                statusText = status
-            }
-        } catch {
-            statusText = "Error: \(error.localizedDescription)"
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundColor(.secondary)
+                .frame(width: 50, alignment: .leading)
+            Text(value)
+                .font(.body.monospacedDigit())
         }
+        .font(.callout)
     }
 }

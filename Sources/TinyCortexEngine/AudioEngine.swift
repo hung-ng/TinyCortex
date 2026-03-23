@@ -34,15 +34,29 @@ public final class AudioEngine {
     private var outputDeviceID: AudioDeviceID = 0
     private var aggregateDeviceID: AudioDeviceID = 0
 
+    /// 3-band EQ (bass/mid/treble). Adjust gains in dB from the main thread.
+    public let equalizer: Equalizer
+
+    /// Render callback timing state (ring buffer of timing samples).
+    private let timingStatePtr: UnsafeMutablePointer<RenderTimingState>
+
+    /// Read render callback timing statistics (call from main thread).
+    public var renderStats: StatsSummary {
+        readRenderTimingStats(timingStatePtr)
+    }
+
     public init(inferenceEngine: InferenceEngine, gateThreshold: Float = 0.01) {
         self.inferenceEngine = inferenceEngine
         self.bufferSize = inferenceEngine.bufferSize
         gateStatePtr.initialize(to: GateState(openThreshold: gateThreshold))
+        self.equalizer = Equalizer(sampleRate: 44100)
+        self.timingStatePtr = createRenderTimingState()
     }
 
     deinit {
         if isRunning { stop() }
         gateStatePtr.deallocate()
+        destroyRenderTimingState(timingStatePtr)
     }
 
     public func start() throws {
@@ -195,6 +209,8 @@ public final class AudioEngine {
             outputChunk: outChunk,
             bufferSize: bSize,
             gateState: gateStatePtr,
+            eqState: equalizer.statePtr,
+            timingState: timingStatePtr,
             engine: self
         ))
         contextPtr = ctxPtr
@@ -263,6 +279,7 @@ public final class AudioEngine {
 
         isRunning = false
         inferenceEngine.resetState()
+        equalizer.resetState()
     }
 
     // MARK: - Device-change handling
@@ -448,6 +465,8 @@ private struct RenderContext {
     let outputChunk: UnsafeMutablePointer<Float>
     let bufferSize: Int
     let gateState: UnsafeMutablePointer<GateState>
+    let eqState: UnsafeMutablePointer<EQState>
+    let timingState: UnsafeMutablePointer<RenderTimingState>
     unowned let engine: AudioEngine
 }
 
@@ -491,6 +510,10 @@ private func renderCallback(
         // Input not ready — feed silence
         memset(ctx.renderBuf, 0, frames * MemoryLayout<Float>.size)
     }
+
+    // Timing starts after AudioUnitRender (I/O pull) — measures only our compute
+    // pipeline (inference + gate + EQ + clamp), not device I/O wait time.
+    let t0 = mach_absolute_time()
 
     // Process through inference engine (async double-buffered)
     if frames == bSize {
@@ -563,12 +586,21 @@ private func renderCallback(
         }
     }
 
+    // --- 3-band EQ ---
+    if ctx.eqState.pointee.enabled {
+        Equalizer.process(buffer: outData, count: frames, state: ctx.eqState)
+    }
+
     // Clamp output to [-1, 1]
     for i in 0..<frames {
         let v = outData[i]
         if v > 1.0 { outData[i] = 1.0 }
         else if v < -1.0 { outData[i] = -1.0 }
     }
+
+    // Record render callback timing
+    let t1 = mach_absolute_time()
+    recordRenderTiming(ctx.timingState, Double(t1 - t0) * machTimebaseMs)
 
     return noErr
 }
