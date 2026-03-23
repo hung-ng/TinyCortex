@@ -37,6 +37,18 @@ public final class AudioEngine {
     /// 3-band EQ (bass/mid/treble). Adjust gains in dB from the main thread.
     public let equalizer: Equalizer
 
+    /// Compressor (pre-amp). Adjust threshold, ratio, attack, release, makeupGain.
+    public let compressor: Compressor
+
+    /// Overdrive (pre-amp). Adjust drive, tone, level.
+    public let overdrive: Overdrive
+
+    /// Delay (post-amp). Adjust time, feedback, mix.
+    public let delay: Delay
+
+    /// Reverb (post-amp). Adjust roomSize, damping, mix.
+    public let reverb: Reverb
+
     /// Render callback timing state (ring buffer of timing samples).
     private let timingStatePtr: UnsafeMutablePointer<RenderTimingState>
 
@@ -50,6 +62,10 @@ public final class AudioEngine {
         self.bufferSize = inferenceEngine.bufferSize
         gateStatePtr.initialize(to: GateState(openThreshold: gateThreshold))
         self.equalizer = Equalizer(sampleRate: 44100)
+        self.compressor = Compressor(sampleRate: 44100)
+        self.overdrive = Overdrive(sampleRate: 44100)
+        self.delay = Delay(sampleRate: 44100)
+        self.reverb = Reverb(sampleRate: 44100)
         self.timingStatePtr = createRenderTimingState()
     }
 
@@ -209,7 +225,11 @@ public final class AudioEngine {
             outputChunk: outChunk,
             bufferSize: bSize,
             gateState: gateStatePtr,
+            compressorState: compressor.statePtr,
+            overdriveState: overdrive.statePtr,
             eqState: equalizer.statePtr,
+            delayState: delay.statePtr,
+            reverbState: reverb.statePtr,
             timingState: timingStatePtr,
             engine: self
         ))
@@ -279,7 +299,11 @@ public final class AudioEngine {
 
         isRunning = false
         inferenceEngine.resetState()
+        compressor.resetState()
+        overdrive.resetState()
         equalizer.resetState()
+        delay.resetState()
+        reverb.resetState()
     }
 
     // MARK: - Device-change handling
@@ -465,7 +489,11 @@ private struct RenderContext {
     let outputChunk: UnsafeMutablePointer<Float>
     let bufferSize: Int
     let gateState: UnsafeMutablePointer<GateState>
+    let compressorState: UnsafeMutablePointer<CompressorState>
+    let overdriveState: UnsafeMutablePointer<OverdriveState>
     let eqState: UnsafeMutablePointer<EQState>
+    let delayState: UnsafeMutablePointer<DelayState>
+    let reverbState: UnsafeMutablePointer<ReverbState>
     let timingState: UnsafeMutablePointer<RenderTimingState>
     unowned let engine: AudioEngine
 }
@@ -512,10 +540,32 @@ private func renderCallback(
     }
 
     // Timing starts after AudioUnitRender (I/O pull) — measures only our compute
-    // pipeline (inference + gate + EQ + clamp), not device I/O wait time.
+    // pipeline (effects + inference + gate + EQ + clamp), not device I/O wait time.
     let t0 = mach_absolute_time()
 
-    // Process through inference engine (async double-buffered)
+    // 1. Measure input RMS for gate (before any processing)
+    let gs = ctx.gateState
+    var rms: Float = 0
+    if gs.pointee.openThreshold > 0 {
+        var sumSq: Float = 0
+        for i in 0..<frames {
+            let v = ctx.renderBuf[i]
+            sumSq += v * v
+        }
+        rms = sqrtf(sumSq / Float(frames))
+    }
+
+    // 2. Compressor on renderBuf (pre-amp, if enabled)
+    if ctx.compressorState.pointee.enabled {
+        Compressor.process(buffer: ctx.renderBuf, count: frames, state: ctx.compressorState)
+    }
+
+    // 3. Overdrive on renderBuf (pre-amp, if enabled)
+    if ctx.overdriveState.pointee.enabled {
+        Overdrive.process(buffer: ctx.renderBuf, count: frames, state: ctx.overdriveState)
+    }
+
+    // 4. Inference: renderBuf → outData
     if frames == bSize {
         ctx.inference.processAsync(input: ctx.renderBuf, output: outData)
     } else {
@@ -530,17 +580,8 @@ private func renderCallback(
         }
     }
 
-    // --- Noise gate (state machine with hysteresis + hold) ---
-    let gs = ctx.gateState
+    // 5. Apply gate gain to outData
     if gs.pointee.openThreshold > 0 {
-        // Measure input RMS
-        var sumSq: Float = 0
-        for i in 0..<frames {
-            let v = ctx.renderBuf[i]
-            sumSq += v * v
-        }
-        let rms = sqrtf(sumSq / Float(frames))
-
         // State machine transitions
         switch gs.pointee.phase {
         case .closed:
@@ -561,7 +602,6 @@ private func renderCallback(
         case .hold:
             gs.pointee.holdCounter -= frames
             if rms >= gs.pointee.closeThreshold {
-                // Signal came back — return to open
                 gs.pointee.phase = .open
             } else if gs.pointee.holdCounter <= 0 {
                 gs.pointee.phase = .release
@@ -578,7 +618,6 @@ private func renderCallback(
             }
         }
 
-        // Apply gate gain to output
         if gs.pointee.gain < 0.999 {
             for i in 0..<frames {
                 outData[i] *= gs.pointee.gain
@@ -586,12 +625,22 @@ private func renderCallback(
         }
     }
 
-    // --- 3-band EQ ---
+    // 6. EQ on outData (if enabled)
     if ctx.eqState.pointee.enabled {
         Equalizer.process(buffer: outData, count: frames, state: ctx.eqState)
     }
 
-    // Clamp output to [-1, 1]
+    // 7. Delay on outData (if enabled)
+    if ctx.delayState.pointee.enabled {
+        Delay.process(buffer: outData, count: frames, state: ctx.delayState)
+    }
+
+    // 8. Reverb on outData (if enabled)
+    if ctx.reverbState.pointee.enabled {
+        Reverb.process(buffer: outData, count: frames, state: ctx.reverbState)
+    }
+
+    // 9. Clamp output to [-1, 1]
     for i in 0..<frames {
         let v = outData[i]
         if v > 1.0 { outData[i] = 1.0 }
